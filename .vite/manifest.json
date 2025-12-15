@@ -1,0 +1,58 @@
+{
+  "../../../@crx/manifest": {
+    "file": "assets/crx-manifest.js.js",
+    "name": "crx-manifest.js",
+    "src": "../../../@crx/manifest",
+    "isEntry": true
+  },
+  "_logger.js": {
+    "file": "assets/logger.js",
+    "name": "logger"
+  },
+  "_react.js": {
+    "file": "assets/react.js",
+    "name": "react",
+    "imports": [
+      "_logger.js"
+    ]
+  },
+  "index.js-loader.js": {
+    "file": "assets/index.js-loader.js",
+    "src": "index.js-loader.js"
+  },
+  "src/background/index.js": {
+    "file": "assets/index.js2.js",
+    "name": "index.js",
+    "src": "src/background/index.js",
+    "isEntry": true,
+    "imports": [
+      "_logger.js"
+    ]
+  },
+  "src/content/index.js": {
+    "file": "assets/index.js.js",
+    "name": "index.js",
+    "src": "src/content/index.js",
+    "isEntry": true,
+    "imports": [
+      "_logger.js",
+      "_react.js"
+    ],
+    "css": [
+      "assets/index.css"
+    ]
+  },
+  "src/popup/index.html": {
+    "file": "assets/index.html.js",
+    "name": "index.html",
+    "src": "src/popup/index.html",
+    "isEntry": true,
+    "imports": [
+      "_react.js",
+      "_logger.js"
+    ],
+    "css": [
+      "assets/index2.css"
+    ]
+  }
+}
