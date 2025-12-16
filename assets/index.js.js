@@ -332,11 +332,11 @@ class ProjectService {
    * Validate project against filters and settings
    */
   async validateProject(project, options = {}) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A;
     const { skipAutoValidation = false } = options;
     const state = store.getState();
     const filters = state.filters;
-    const settings = state.settings;
+    state.settings;
     logger.log(`Validating project: ${project.title}, ${JSON.stringify(project)}`, "content", false);
     const authToken = (_b = (_a = store.getState().auth) == null ? void 0 : _a.profile) == null ? void 0 : _b.freelancer_auth_token;
     if (!skipAutoValidation) {
@@ -395,19 +395,17 @@ class ProjectService {
         };
       }
     }
-    if (settings.checkCanBid) {
-      logger.log("Checking if user can bid on project via API...", "content");
-      const canBidResult = await apiService.checkCanBidOnProject(project.id, authToken);
-      if (!canBidResult.success || !canBidResult.canBid) {
-        const reason = canBidResult.message || "Cannot bid on this project (API check failed)";
-        logger.log(`Cannot bid on project: ${reason}`, "content");
-        return {
-          valid: false,
-          reason
-        };
-      }
-      logger.log("API confirmed user can bid on project", "content");
+    logger.log("Checking if user can bid on project via API...", "content");
+    const canBidResult = await apiService.checkCanBidOnProject(project.id, authToken);
+    if (!canBidResult.success || !canBidResult.canBid) {
+      const reason = canBidResult.message || "Cannot bid on this project (API check failed)";
+      logger.log(`Cannot bid on project: ${reason}`, "content");
+      return {
+        valid: false,
+        reason
+      };
     }
+    logger.log("API confirmed user can bid on project", "content");
     let projectSkills = [];
     if (project.jobs && Array.isArray(project.jobs) && project.jobs.length > 0) {
       projectSkills = project.jobs;
@@ -451,55 +449,59 @@ class ProjectService {
     const hideCurrencies = filters.hideCurrencies || "";
     if (hideCurrencies) {
       const hideCurrencyList = utils.parseCommaSeparated(hideCurrencies).map((c) => c.trim().toUpperCase());
-      const projectCurrency = (((_g = project.currency) == null ? void 0 : _g.code) || "").toUpperCase();
-      if (projectCurrency && hideCurrencyList.includes(projectCurrency)) {
+      const projectCurrency2 = (((_g = project.currency) == null ? void 0 : _g.code) || "").toUpperCase();
+      if (projectCurrency2 && hideCurrencyList.includes(projectCurrency2)) {
         return {
           valid: false,
           reason: "Currency in hide list"
         };
       }
     }
+    const projectCurrency = (((_h = project.currency) == null ? void 0 : _h.code) || project.currency_code || "USD").toUpperCase();
     if (isHourly) {
       const minRate = filters.minRate || 5;
       const maxRate = filters.maxRate || 100;
-      const projectRate = ((_h = project.budget) == null ? void 0 : _h.minimum) || ((_i = project.budget) == null ? void 0 : _i.maximum) || 0;
-      if (projectRate > 0 && (projectRate < minRate || projectRate > maxRate)) {
+      const projectRate = ((_i = project.budget) == null ? void 0 : _i.minimum) || ((_j = project.budget) == null ? void 0 : _j.maximum) || 0;
+      const projectRateUSD = utils.convertToUSD(projectRate, projectCurrency);
+      if (projectRate > 0 && (projectRateUSD < minRate || projectRateUSD > maxRate)) {
         return {
           valid: false,
-          reason: `Hourly rate out of range (${projectRate} vs allowed ${minRate}-${maxRate})`
+          reason: `Hourly rate out of range (${projectRate} ${projectCurrency} ≈ $${projectRateUSD.toFixed(2)} USD vs allowed $${minRate}-$${maxRate} USD)`
         };
       }
     } else {
       const minBudget = filters.minBudget || 10;
       const maxBudget = filters.maxBudget || 1e4;
-      if (project.budget.maximum < minBudget || project.budget.minimum > maxBudget) {
+      const projectMinBudgetUSD = utils.convertToUSD(project.budget.minimum || 0, projectCurrency);
+      const projectMaxBudgetUSD = utils.convertToUSD(project.budget.maximum || 0, projectCurrency);
+      if (projectMaxBudgetUSD < minBudget || projectMinBudgetUSD > maxBudget) {
         return {
           valid: false,
-          reason: `Budget out of range (${project.budget.minimum}-${project.budget.maximum} vs allowed ${minBudget}-${maxBudget})`
+          reason: `Budget out of range (${project.budget.minimum}-${project.budget.maximum} ${projectCurrency} ≈ $${projectMinBudgetUSD.toFixed(2)}-$${projectMaxBudgetUSD.toFixed(2)} USD vs allowed $${minBudget}-$${maxBudget} USD)`
         };
       }
     }
     const hideCountries = filters.hideCountries || "";
     if (hideCountries) {
       const hideCountryList = utils.parseCommaSeparated(hideCountries).map((c) => c.trim().toLowerCase());
-      let countryFromOwnerLocation = ((_l = (_k = (_j = project.owner) == null ? void 0 : _j.location) == null ? void 0 : _k.country) == null ? void 0 : _l.name) || null;
-      let countryFromOwner = ((_m = project.owner) == null ? void 0 : _m.country) || null;
-      let countryFromLocation = ((_o = (_n = project.location) == null ? void 0 : _n.country) == null ? void 0 : _o.name) || null;
+      let countryFromOwnerLocation = ((_m = (_l = (_k = project.owner) == null ? void 0 : _k.location) == null ? void 0 : _l.country) == null ? void 0 : _m.name) || null;
+      let countryFromOwner = ((_n = project.owner) == null ? void 0 : _n.country) || null;
+      let countryFromLocation = ((_p = (_o = project.location) == null ? void 0 : _o.country) == null ? void 0 : _p.name) || null;
       let countryFromProject = project.country || null;
       if (!countryFromOwnerLocation && !countryFromOwner && !countryFromLocation && !countryFromProject && project.id) {
         try {
           const projectDetails = await apiService.fetchProjectDetails(project.id, authToken);
           if (projectDetails.success && projectDetails.data) {
             const details = projectDetails.data;
-            countryFromOwnerLocation = ((_r = (_q = (_p = details.owner) == null ? void 0 : _p.location) == null ? void 0 : _q.country) == null ? void 0 : _r.name) || null;
-            countryFromOwner = ((_s = details.owner) == null ? void 0 : _s.country) || null;
-            countryFromLocation = ((_u = (_t = details.location) == null ? void 0 : _t.country) == null ? void 0 : _u.name) || null;
+            countryFromOwnerLocation = ((_s = (_r = (_q = details.owner) == null ? void 0 : _q.location) == null ? void 0 : _r.country) == null ? void 0 : _s.name) || null;
+            countryFromOwner = ((_t = details.owner) == null ? void 0 : _t.country) || null;
+            countryFromLocation = ((_v = (_u = details.location) == null ? void 0 : _u.country) == null ? void 0 : _v.name) || null;
             countryFromProject = details.country || null;
             if (details.owner_id && !countryFromOwnerLocation && !countryFromOwner) {
               const employerDetails = await apiService.fetchEmployerDetails(details.owner_id);
               if (employerDetails.success && employerDetails.data) {
                 countryFromOwner = employerDetails.data.country || null;
-                countryFromOwnerLocation = ((_w = (_v = employerDetails.data.location) == null ? void 0 : _v.country) == null ? void 0 : _w.name) || null;
+                countryFromOwnerLocation = ((_x = (_w = employerDetails.data.location) == null ? void 0 : _w.country) == null ? void 0 : _x.name) || null;
               }
             }
           }
@@ -532,9 +534,9 @@ class ProjectService {
     const hideClients = filters.hideClients || "";
     if (hideClients) {
       const hideClientList = utils.parseCommaSeparated(hideClients).map((c) => c.trim().toLowerCase());
-      const ownerId = project.owner_id || ((_x = project.owner) == null ? void 0 : _x.id) || null;
-      const ownerUsername = ((_y = project.owner) == null ? void 0 : _y.username) || null;
-      const ownerName = ((_z = project.owner) == null ? void 0 : _z.name) || null;
+      const ownerId = project.owner_id || ((_y = project.owner) == null ? void 0 : _y.id) || null;
+      const ownerUsername = ((_z = project.owner) == null ? void 0 : _z.username) || null;
+      const ownerName = ((_A = project.owner) == null ? void 0 : _A.name) || null;
       const projectOwnerId = (ownerId || "").toString().toLowerCase().trim();
       const projectOwnerUsername = (ownerUsername || ownerName || "").toLowerCase().trim();
       if (projectOwnerId || projectOwnerUsername) {
@@ -573,7 +575,7 @@ class ProjectService {
    * @param {Object} options - { project, proposal, skipBotStatusCheck?: boolean }
    */
   async placeBid({ project, proposal, skipBotStatusCheck = false }) {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     const state = store.getState();
     const biddingState = state.bidding;
     const settings = state.settings;
@@ -585,17 +587,20 @@ class ProjectService {
     logger.log(`Placing bid on: ${project.title}`, "content", true);
     try {
       const isHourly = project.hourly === true || project.type === "hourly";
+      const projectCurrency = (((_a = project.currency) == null ? void 0 : _a.code) || project.currency_code || "USD").toUpperCase();
       const bidAmount = utils.calculateBidAmount(
         project.budget.minimum,
         project.budget.maximum,
-        isHourly
+        isHourly,
+        projectCurrency
       );
       const duration = utils.calculateDuration(
         project.budget.minimum,
         project.budget.maximum,
-        isHourly
+        isHourly,
+        projectCurrency
       );
-      const authToken = (_b = (_a = store.getState().auth) == null ? void 0 : _a.profile) == null ? void 0 : _b.freelancer_auth_token;
+      const authToken = (_c = (_b = store.getState().auth) == null ? void 0 : _b.profile) == null ? void 0 : _c.freelancer_auth_token;
       if (!authToken) {
         throw new Error("Not logged in - Please login to Freelancer.com first");
       }
@@ -607,7 +612,7 @@ class ProjectService {
           if (!profile) {
             const profileResult = await store.dispatch(fetchUserProfile(false));
             if (fetchUserProfile.fulfilled.match(profileResult)) {
-              profile = (_c = profileResult.payload) == null ? void 0 : _c.profile;
+              profile = (_d = profileResult.payload) == null ? void 0 : _d.profile;
             }
           }
           if (profile) {
@@ -953,7 +958,6 @@ function ProjectModal({ onClose }) {
         // Skip bot status check for manual bidding
       });
       if (result.success) {
-        logger.success("Bid placed successfully!", "content", true);
         dispatch(setHasBid(true));
         window.location.reload();
       } else {
@@ -1927,7 +1931,6 @@ function SettingsModal({ onClose }) {
   const [localPlaceBidDelay, setLocalPlaceBidDelay] = reactExports.useState(settingsState.placeBidDelay || 20);
   const [localApiPullDelay, setLocalApiPullDelay] = reactExports.useState(settingsState.apiPullDelay || 20);
   const [localAutoBotCount, setLocalAutoBotCount] = reactExports.useState(settingsState.autoBotCount || 0);
-  const [localCheckCanBid, setLocalCheckCanBid] = reactExports.useState(settingsState.checkCanBid || false);
   const [localOpenInNewTab, setLocalOpenInNewTab] = reactExports.useState(settingsState.openInNewTab || false);
   const [localOpenProjectModal, setLocalOpenProjectModal] = reactExports.useState(settingsState.openProjectModal || false);
   const [isSaving, setIsSaving] = reactExports.useState(false);
@@ -1935,7 +1938,6 @@ function SettingsModal({ onClose }) {
     setLocalPlaceBidDelay(settingsState.placeBidDelay || 20);
     setLocalApiPullDelay(settingsState.apiPullDelay || 20);
     setLocalAutoBotCount(settingsState.autoBotCount || 0);
-    setLocalCheckCanBid(settingsState.checkCanBid || false);
     setLocalOpenInNewTab(settingsState.openInNewTab || false);
     setLocalOpenProjectModal(settingsState.openProjectModal || false);
   }, [settingsState]);
@@ -1948,7 +1950,6 @@ function SettingsModal({ onClose }) {
         placeBidDelay: validatedPlaceBidDelay,
         apiPullDelay: validatedApiPullDelay,
         autoBotCount: localAutoBotCount,
-        checkCanBid: localCheckCanBid,
         openInNewTab: localOpenInNewTab,
         openProjectModal: localOpenProjectModal
       }));
@@ -2039,19 +2040,6 @@ function SettingsModal({ onClose }) {
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "p-3 border border-dark-border rounded-lg bg-dark-bg", children: [
         /* @__PURE__ */ jsxRuntimeExports.jsx("label", { className: "block text-sm font-semibold mb-3 text-white", children: "Feature Flags" }),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "space-y-2", children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: `flex items-center gap-2 p-2 bg-dark-card border border-dark-border rounded cursor-pointer hover:bg-dark-border transition-all duration-200 ${isSaving ? "opacity-60 cursor-not-allowed" : ""}`, children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx(
-              "input",
-              {
-                type: "checkbox",
-                checked: localCheckCanBid,
-                onChange: (e) => setLocalCheckCanBid(e.target.checked),
-                disabled: isSaving,
-                className: "w-4 h-4 text-blue-600 bg-dark-bg border-dark-border rounded focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-              }
-            ),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-sm font-medium text-white", children: "Check if User Can Bid (API validation)" })
-          ] }),
           /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: `flex items-center gap-2 p-2 bg-dark-card border border-dark-border rounded cursor-pointer hover:bg-dark-border transition-all duration-200 ${isSaving ? "opacity-60 cursor-not-allowed" : ""}`, children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx(
               "input",
@@ -7794,7 +7782,6 @@ async function processProject(project) {
     result = { success: false, message: error.message || "Failed to place bid" };
   }
   if (result.success) {
-    logger.success(`Bid placed: ${projectData.title}`, "content", true);
     const bidAmount = result.bidAmount || 0;
     store.dispatch(sendTelegramBidNotification({
       project: projectData,
@@ -7958,6 +7945,12 @@ if (!document.querySelector('link[href*="font-awesome"]')) {
   logger.log("Project service initialized", "content");
   await modalManager.init();
   logger.log("Modal manager initialized", "content");
+  try {
+    await utils.fetchCurrencies();
+    logger.log("Currencies fetched and cached successfully", "content");
+  } catch (error) {
+    logger.warn(`Failed to fetch currencies on initialization: ${error.message}`, "content");
+  }
   let previousBiddingState = store.getState().bidding;
   store.subscribe(() => {
     const currentBiddingState = store.getState().bidding;

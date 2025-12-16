@@ -3301,7 +3301,8 @@ const API_ENDPOINTS = {
   CHECK_SELF_BID: "/api/projects/0.1/bids",
   CREATE_MESSAGE_THREAD: "/api/messages/0.1/threads/",
   GET_MESSAGES: "/api/messages/0.1/messages/",
-  SEND_MESSAGE: "/api/messages/0.1/messages/"
+  SEND_MESSAGE: "/api/messages/0.1/messages/",
+  CURRENCIES: "/api/projects/0.1/currencies/"
 };
 const SUPABASE_CONFIG = {
   URL: "https://zscjfgjmutddidwluami.supabase.co",
@@ -3312,11 +3313,797 @@ const SCRIPT_STATUS = {
   RUNNING: "Running",
   PAUSED: "Paused"
 };
+const CURRENCIES_CACHE_DURATION = 24 * 60 * 60 * 1e3;
 if (typeof window !== "undefined") {
   window.API_ENDPOINTS = API_ENDPOINTS;
   window.SCRIPT_STATUS = SCRIPT_STATUS;
   window.SUPABASE_CONFIG = SUPABASE_CONFIG;
+  window.CURRENCIES_CACHE_DURATION = CURRENCIES_CACHE_DURATION;
 }
+class ApiService {
+  constructor() {
+    this.baseUrl = API_ENDPOINTS.BASE_URL;
+  }
+  /**
+   * Make a fetch request with common headers and error handling
+   * @private
+   */
+  async _fetch(url, options = {}) {
+    const defaultHeaders = {
+      accept: "application/json, text/plain, */*",
+      ...options.headers
+    };
+    const response = await fetch(url, {
+      ...options,
+      headers: defaultHeaders
+    });
+    if (!response.ok) {
+      let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+      let errorDetails = null;
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.message || errorData.error || errorData.error_description || errorMessage;
+        errorDetails = errorData;
+      } catch (e) {
+        try {
+          const text = await response.text();
+          if (text) {
+            errorMessage = `${errorMessage} - ${text}`;
+            errorDetails = { raw: text };
+          }
+        } catch (textError) {
+        }
+      }
+      if (response.status === 403) {
+        logger.error(`[ApiService] 403 Forbidden - ${errorMessage}`, "content");
+        if (errorDetails) {
+          logger.error(`[ApiService] Error details: ${JSON.stringify(errorDetails)}`, "content");
+        }
+      }
+      throw new Error(errorMessage);
+    }
+    return await response.json();
+  }
+  /**
+   * Make an authenticated request
+   * @private
+   */
+  async _authenticatedFetch(url, authToken, options = {}) {
+    if (!authToken) {
+      throw new Error("Authentication token required");
+    }
+    return this._fetch(url, {
+      ...options,
+      headers: {
+        "Freelancer-Auth-V2": authToken,
+        ...options.headers
+      }
+    });
+  }
+  /**
+   * Fetch user profile from API
+   * @returns {Promise<Object>} Result with user profile data
+   */
+  async fetchUserProfile() {
+    try {
+      const params = new URLSearchParams({
+        status: "true",
+        webapp: "1",
+        avatar: "true",
+        compact: "true",
+        new_errors: "true",
+        new_pools: "true",
+        display_info: "true",
+        country_details: "true",
+        jobs: "true",
+        membership_details: "true",
+        portfolio_details: "true",
+        preferred_details: "true",
+        profile_description: "true",
+        qualification_details: "true",
+        recommendations: "true",
+        responsiveness: "true",
+        badge_details: "true",
+        rising_star: "true"
+      });
+      const url = new URL(`${this.baseUrl}${API_ENDPOINTS.USER_PROFILE}`);
+      url.search = params.toString();
+      const data = await this._fetch(url.toString());
+      if (data.status === "success") {
+        return {
+          success: true,
+          data: data.result
+        };
+      } else {
+        throw new Error(data.message || "API returned unsuccessful status");
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+  /**
+   * Fetch employer details from users API with employer reputation
+   * @param {number} employerId - Employer/User ID
+   * @returns {Promise<Object>} Result with employer details
+   */
+  async fetchEmployerDetails(employerId) {
+    var _a2, _b, _c, _d, _e, _f, _g, _h;
+    try {
+      const params = new URLSearchParams({
+        employer_reputation: "true"
+      });
+      const url = new URL(`${this.baseUrl}${API_ENDPOINTS.USER_DETAILS}${employerId}`);
+      url.search = params.toString();
+      const data = await this._fetch(url.toString());
+      if (data.status !== "success" || !data.result) {
+        throw new Error("API returned unsuccessful status");
+      }
+      const result = data.result;
+      const rep = ((_a2 = result.employer_reputation) == null ? void 0 : _a2.entire_history) || {};
+      let logoUrl = result.avatar_cdn || result.avatar_large_cdn || result.avatar || null;
+      if (logoUrl && logoUrl.startsWith("//")) {
+        logoUrl = "https:" + logoUrl;
+      } else if (!logoUrl) {
+        logoUrl = `${this.baseUrl}/img/unknown.png`;
+      }
+      const details = {
+        name: result.username || result.public_name || result.display_name || "Unknown",
+        logo: logoUrl,
+        past_projects: rep.all || 0,
+        completed_projects: rep.reviews || 0,
+        payment_verified: ((_b = result.status) == null ? void 0 : _b.payment_verified) || false,
+        email_verified: ((_c = result.status) == null ? void 0 : _c.email_verified) || false,
+        phone_verified: ((_d = result.status) == null ? void 0 : _d.phone_verified) || false,
+        identity_verified: ((_e = result.status) == null ? void 0 : _e.identity_verified) || false,
+        country: ((_g = (_f = result.location) == null ? void 0 : _f.country) == null ? void 0 : _g.name) || null,
+        member_since: result.registration_date ? new Date(result.registration_date * 1e3).toLocaleDateString() : null,
+        overall_rating: rep.overall || null,
+        completion_rate: rep.completion_rate || null,
+        positive_percentage: rep.positive ? (rep.positive * 100).toFixed(1) : null,
+        earnings_score: ((_h = result.employer_reputation) == null ? void 0 : _h.earnings_score) || null
+      };
+      return {
+        success: true,
+        data: details
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+  /**
+   * Lookup project by SEO URL
+   * @param {string} seoUrl - Project SEO URL slug
+   * @returns {Promise<Object>} Result with project data
+   */
+  async lookupProjectBySeoUrl(seoUrl) {
+    try {
+      const params = new URLSearchParams({
+        limit: "1",
+        "seo_urls[]": seoUrl,
+        selected_bids: "true",
+        file_details: "true",
+        webapp: "1",
+        compact: "true",
+        new_errors: "true",
+        new_pools: "true"
+      });
+      const url = new URL(`${this.baseUrl}${API_ENDPOINTS.PROJECT_SEARCH}`);
+      url.search = params.toString();
+      const data = await this._fetch(url.toString());
+      if (data.status === "success" && data.result && data.result.projects && data.result.projects.length > 0) {
+        const project = data.result.projects[0];
+        const normalizedSeoUrl = seoUrl.trim().replace(/\/$/, "");
+        const normalizedProjectSeoUrl = (project.seo_url || "").trim().replace(/\/$/, "");
+        if (normalizedProjectSeoUrl === normalizedSeoUrl) {
+          return {
+            success: true,
+            project
+          };
+        } else {
+          const matchingProject = data.result.projects.find((p) => {
+            const normalized = (p.seo_url || "").trim().replace(/\/$/, "");
+            return normalized === normalizedSeoUrl;
+          });
+          if (matchingProject) {
+            return {
+              success: true,
+              project: matchingProject
+            };
+          } else {
+            throw new Error(`Project SEO URL mismatch. Expected: ${normalizedSeoUrl}, Got: ${normalizedProjectSeoUrl}`);
+          }
+        }
+      } else {
+        throw new Error("No projects returned from API");
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+  /**
+   * Fetch project details from API
+   * @param {number} projectId - Project ID
+   * @param {string} authToken - Freelancer-Auth-V2 token (optional)
+   * @returns {Promise<Object>} Result with project details
+   */
+  async fetchProjectDetails(projectId, authToken = null) {
+    try {
+      const params = new URLSearchParams({
+        compact: "true",
+        job_details: "true",
+        user_details: "true",
+        user_avatar: "true",
+        user_country_details: "true",
+        user_display_info: "true",
+        user_membership_details: "true"
+      });
+      const url = new URL(`${this.baseUrl}${API_ENDPOINTS.PROJECT_DETAILS}${projectId}`);
+      url.search = params.toString();
+      let data;
+      if (authToken) {
+        data = await this._authenticatedFetch(url.toString(), authToken);
+      } else {
+        data = await this._fetch(url.toString());
+      }
+      if (data.status === "success") {
+        return {
+          success: true,
+          data: data.result
+        };
+      } else {
+        throw new Error(data.message || "API returned unsuccessful status");
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+  /**
+   * Check if user can bid on a project
+   * @param {number|string} projectId - Project ID
+   * @param {string} authToken - Freelancer-Auth-V2 token (optional but recommended)
+   * @returns {Promise<Object>} Result with canBid status
+   */
+  async checkCanBidOnProject(projectId, authToken = null) {
+    var _a2, _b, _c, _d, _e, _f, _g, _h, _i;
+    try {
+      const params = new URLSearchParams({
+        projectId: projectId.toString(),
+        compact: "true",
+        new_errors: "true",
+        new_pools: "true"
+      });
+      const url = new URL(`${this.baseUrl}${API_ENDPOINTS.CAN_BID_ON_PROJECT}`);
+      url.search = params.toString();
+      let data;
+      if (authToken) {
+        data = await this._authenticatedFetch(url.toString(), authToken);
+      } else {
+        data = await this._fetch(url.toString());
+      }
+      if (data.status === "success" && data.result) {
+        const result = data.result;
+        const openForBidding = result.openForBidding === true;
+        const hasPremiumProjectEligible = result.premiumProjectEligible !== void 0;
+        const hasPremiumVerifiedProjectEligible = result.premiumVerifiedProjectEligible !== void 0;
+        const hasPremiumVerifiedJobEligible = result.premiumVerifiedJobEligible !== void 0;
+        const hasFeaturedPremiumProjectEligible = result.featuredPremiumProjectEligible !== void 0;
+        const criticalChecks = {
+          openForBidding,
+          freelancerHasBalance: result.freelancerHasBalance === true,
+          freelancerEmailVerified: result.freelancerEmailVerified === true,
+          profileCompleted: result.profileCompleted === true,
+          skillRequirementsMet: result.skillRequirementsMet === true,
+          hasBidRestriction: result.hasBidRestriction === false,
+          notSpamRestricted: result.notSpamRestricted === true,
+          certificationRequirementsMet: result.certificationRequirementsMet === true,
+          freelancerInvitationRequirementMet: result.freelancerInvitationRequirementMet === true,
+          freelancerPreferredRequirementMet: result.freelancerPreferredRequirementMet === true,
+          ndaRequirementMet: result.ndaRequirementMet === true,
+          projectLanguageCriteriaMet: result.projectLanguageCriteriaMet === true,
+          expertCommunityRequirementMet: result.expertCommunityRequirementMet === true,
+          isAtoSerrRequirementMet: result.isAtoSerrRequirementMet === true
+        };
+        const premiumChecks = {
+          premiumProjectEligible: hasPremiumProjectEligible ? ((_a2 = result.premiumProjectEligible) == null ? void 0 : _a2.status) === true : true,
+          premiumVerifiedProjectEligible: hasPremiumVerifiedProjectEligible ? ((_b = result.premiumVerifiedProjectEligible) == null ? void 0 : _b.status) === true : true,
+          premiumVerifiedJobEligible: hasPremiumVerifiedJobEligible ? ((_c = result.premiumVerifiedJobEligible) == null ? void 0 : _c.status) === true : true,
+          featuredPremiumProjectEligible: hasFeaturedPremiumProjectEligible ? ((_d = result.featuredPremiumProjectEligible) == null ? void 0 : _d.status) === true : true
+        };
+        let canBid = openForBidding && criticalChecks.freelancerHasBalance && criticalChecks.freelancerEmailVerified && criticalChecks.profileCompleted && criticalChecks.skillRequirementsMet && criticalChecks.hasBidRestriction && criticalChecks.notSpamRestricted && criticalChecks.certificationRequirementsMet && criticalChecks.freelancerInvitationRequirementMet && criticalChecks.freelancerPreferredRequirementMet && criticalChecks.ndaRequirementMet && criticalChecks.projectLanguageCriteriaMet && criticalChecks.expertCommunityRequirementMet && criticalChecks.isAtoSerrRequirementMet;
+        if (hasPremiumProjectEligible) {
+          canBid = canBid && premiumChecks.premiumProjectEligible;
+        }
+        if (hasPremiumVerifiedProjectEligible) {
+          canBid = canBid && premiumChecks.premiumVerifiedProjectEligible;
+        }
+        if (hasPremiumVerifiedJobEligible) {
+          canBid = canBid && premiumChecks.premiumVerifiedJobEligible;
+        }
+        if (hasFeaturedPremiumProjectEligible) {
+          canBid = canBid && premiumChecks.featuredPremiumProjectEligible;
+        }
+        let message = canBid ? "Can bid on project" : "Cannot bid on project";
+        if (!canBid) {
+          const failedChecks = [];
+          if (!openForBidding) failedChecks.push("Project not open for bidding");
+          if (!criticalChecks.freelancerHasBalance) failedChecks.push("Insufficient balance");
+          if (!criticalChecks.freelancerEmailVerified) failedChecks.push("Email not verified");
+          if (!criticalChecks.profileCompleted) failedChecks.push("Profile not completed");
+          if (!criticalChecks.skillRequirementsMet) failedChecks.push("Skill requirements not met");
+          if (!criticalChecks.hasBidRestriction) failedChecks.push("Bid restriction active");
+          if (!criticalChecks.notSpamRestricted) failedChecks.push("Account spam restricted");
+          if (!criticalChecks.certificationRequirementsMet) failedChecks.push("Certification requirements not met");
+          if (!criticalChecks.freelancerInvitationRequirementMet) failedChecks.push("Invitation requirement not met");
+          if (!criticalChecks.freelancerPreferredRequirementMet) failedChecks.push("Preferred freelancer requirement not met");
+          if (!criticalChecks.ndaRequirementMet) failedChecks.push("NDA requirement not met");
+          if (!criticalChecks.projectLanguageCriteriaMet) failedChecks.push("Project language criteria not met");
+          if (!criticalChecks.expertCommunityRequirementMet) failedChecks.push("Expert community requirement not met");
+          if (!criticalChecks.isAtoSerrRequirementMet) failedChecks.push("AtoSerr requirement not met");
+          if (hasPremiumProjectEligible && !premiumChecks.premiumProjectEligible) {
+            const threshold = ((_e = result.premiumProjectEligible) == null ? void 0 : _e.thresholdAmountUsd) || 0;
+            const minReviews = ((_f = result.premiumProjectEligible) == null ? void 0 : _f.minimumReviewCount) || 0;
+            failedChecks.push(`Not eligible for premium projects (need ${minReviews} reviews, $${threshold} threshold)`);
+          }
+          if (hasPremiumVerifiedProjectEligible && !premiumChecks.premiumVerifiedProjectEligible) {
+            const threshold = ((_g = result.premiumVerifiedProjectEligible) == null ? void 0 : _g.thresholdAmountUsd) || 0;
+            failedChecks.push(`Not eligible for premium verified projects ($${threshold} threshold)`);
+          }
+          if (hasPremiumVerifiedJobEligible && !premiumChecks.premiumVerifiedJobEligible) {
+            const jobsRequired = ((_h = result.premiumVerifiedJobEligible) == null ? void 0 : _h.jobsRequired) || [];
+            const jobNames = jobsRequired.map((j) => j.name).join(", ");
+            failedChecks.push(`Not eligible for premium verified jobs (need: ${jobNames})`);
+          }
+          if (hasFeaturedPremiumProjectEligible && !premiumChecks.featuredPremiumProjectEligible) {
+            const minReviews = ((_i = result.featuredPremiumProjectEligible) == null ? void 0 : _i.minimumReviewCount) || 0;
+            failedChecks.push(`Not eligible for featured premium projects (need ${minReviews} reviews)`);
+          }
+          if (failedChecks.length > 0) {
+            message = `Cannot bid: ${failedChecks.join(", ")}`;
+          }
+        }
+        return {
+          success: true,
+          canBid,
+          openForBidding,
+          message,
+          data: result,
+          criticalChecks,
+          premiumChecks
+        };
+      } else {
+        return {
+          success: false,
+          canBid: false,
+          openForBidding: false,
+          message: data.message || "API check failed",
+          error: data.message
+        };
+      }
+    } catch (error) {
+      return {
+        success: false,
+        canBid: false,
+        error: error.message
+      };
+    }
+  }
+  /**
+   * Check if user has already bid on a project
+   * @param {number|string} projectId - Project ID
+   * @param {number|string} bidderId - User/Bidder ID
+   * @param {string} authToken - Freelancer-Auth-V2 token (optional but recommended)
+   * @returns {Promise<Object>} Result with hasBid status
+   */
+  async checkSelfBid(projectId, bidderId, authToken = null) {
+    try {
+      const params = new URLSearchParams({
+        limit: "1",
+        [`bidders[]`]: bidderId.toString(),
+        quotations: "true",
+        include_profile_id: "true",
+        bid_billing_info: "true",
+        webapp: "1",
+        compact: "true",
+        new_errors: "true",
+        new_pools: "true"
+      });
+      if (projectId) {
+        params.append(`projects[]`, projectId.toString());
+      }
+      const url = new URL(`${this.baseUrl}${API_ENDPOINTS.CHECK_SELF_BID}`);
+      url.search = params.toString();
+      let data;
+      if (authToken) {
+        data = await this._authenticatedFetch(url.toString(), authToken);
+      } else {
+        data = await this._fetch(url.toString());
+      }
+      if (data.status === "success" && data.result) {
+        const bids = data.result.bids || [];
+        const hasBid = Array.isArray(bids) && bids.length > 0;
+        let projectBids = bids;
+        if (projectId && hasBid) {
+          projectBids = bids.filter(
+            (bid) => bid.project_id && bid.project_id.toString() === projectId.toString()
+          );
+        }
+        const hasBidOnProject = projectBids.length > 0;
+        return {
+          success: true,
+          hasBid: hasBidOnProject,
+          bidCount: projectBids.length,
+          bids: projectBids,
+          allBids: bids,
+          message: hasBidOnProject ? "User has already bid on this project" : "User has not bid on this project"
+        };
+      } else {
+        return {
+          success: false,
+          hasBid: false,
+          bidCount: 0,
+          message: data.message || "API check failed",
+          error: data.message
+        };
+      }
+    } catch (error) {
+      return {
+        success: false,
+        hasBid: false,
+        bidCount: 0,
+        error: error.message
+      };
+    }
+  }
+  /**
+   * Fetch active projects from API
+   * @returns {Promise<Object>} Result with projects list
+   */
+  async fetchActiveProjects() {
+    try {
+      const params = new URLSearchParams({
+        compact: "true",
+        limit: "50",
+        "project_statuses[]": "active",
+        "job_details": "true",
+        "location_details": "true",
+        "user_details": "true",
+        "sort_field": "time_updated",
+        "sort_order": "DESC"
+      });
+      const url = new URL(`${this.baseUrl}${API_ENDPOINTS.PROJECTS}`);
+      url.search = params.toString();
+      const data = await this._fetch(url.toString());
+      if (data.status === "success" && data.result && data.result.projects) {
+        return {
+          success: true,
+          projects: data.result.projects
+        };
+      } else {
+        throw new Error(data.message || "No projects in API response");
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+  /**
+   * Submit bid to Freelancer API
+   * @param {Object} bidData - Bid data
+   * @param {string} authToken - Freelancer-Auth-V2 token
+   * @returns {Promise<Object>} Result
+   */
+  async submitBid(bidData, authToken) {
+    var _a2;
+    try {
+      if (!authToken) {
+        return {
+          success: false,
+          message: "Not authenticated - missing auth token"
+        };
+      }
+      const url = `${this.baseUrl}${API_ENDPOINTS.PLACE_BID}`;
+      const data = await this._authenticatedFetch(url, authToken, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(bidData)
+      });
+      if (data.status === "success") {
+        return {
+          success: true,
+          bidId: (_a2 = data.result) == null ? void 0 : _a2.id,
+          message: "Bid placed successfully"
+        };
+      } else {
+        return {
+          success: false,
+          message: data.message || "Failed to submit bid"
+        };
+      }
+    } catch (error) {
+      return {
+        success: false,
+        message: error.message || "Failed to submit bid"
+      };
+    }
+  }
+  /**
+   * Update proposal description
+   * @param {number} bidId - Bid ID
+   * @param {Object} proposalData - Proposal data
+   * @param {string} authToken - Freelancer-Auth-V2 token
+   * @returns {Promise<Object>} Result
+   */
+  async updateProposal(bidId, proposalData, authToken) {
+    try {
+      if (!authToken) {
+        return {
+          success: false,
+          message: "Not authenticated"
+        };
+      }
+      const url = `${this.baseUrl}${API_ENDPOINTS.UPDATE_BID}${bidId}/`;
+      const data = await this._authenticatedFetch(url, authToken, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(proposalData)
+      });
+      return {
+        success: data.status === "success",
+        message: data.message
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error.message || "Failed to update proposal"
+      };
+    }
+  }
+  /**
+   * Create or get message thread
+   * POST /api/messages/0.1/threads/?members[]=1234567&members[]=1234568&context_type=project&context=9987678
+   * 
+   * @param {Array<number>} members - Member user IDs array
+   * @param {string} contextType - Context type (e.g., 'project')
+   * @param {number|string} context - Context ID (project ID for project context)
+   * @param {string} authToken - Freelancer-Auth-V2 token
+   * @returns {Promise<Object>} Result with thread ID
+   */
+  async createMessageThread(members, contextType, context, authToken) {
+    var _a2;
+    try {
+      if (!authToken) {
+        return { success: false, message: "Not authenticated" };
+      }
+      if (!Array.isArray(members)) {
+        members = [members];
+      }
+      if (!members.length) {
+        return { success: false, message: "At least one member ID is required" };
+      }
+      if (!contextType) {
+        return { success: false, message: "Context type is required" };
+      }
+      if (!context) {
+        return { success: false, message: "Context ID is required" };
+      }
+      const params = new URLSearchParams();
+      members.forEach((memberId) => {
+        params.append("members[]", memberId.toString());
+      });
+      params.append("context_type", contextType);
+      params.append("context", context.toString());
+      logger.log(`[ApiService] Creating thread with params: ${params.toString()}`, "content");
+      logger.log(`[ApiService] Members: ${members.join(", ")}, ContextType: ${contextType}, Context: ${context}`, "content");
+      const url = new URL(`${this.baseUrl}${API_ENDPOINTS.CREATE_MESSAGE_THREAD}`);
+      url.search = params.toString();
+      logger.log(`[ApiService] Request URL: ${url.toString()}`, "content");
+      logger.log(`[ApiService] Auth token length: ${(authToken == null ? void 0 : authToken.length) || 0}`, "content");
+      logger.log(`[ApiService] Auth token preview: ${authToken ? authToken.substring(0, 20) + "..." : "null"}`, "content");
+      const data = await this._authenticatedFetch(url.toString(), authToken, {
+        method: "POST"
+      });
+      if (data.status === "success" && data.result) {
+        const threadId = data.result.id || ((_a2 = data.result.thread) == null ? void 0 : _a2.id) || data.result.thread_id;
+        if (!threadId) {
+          return {
+            success: false,
+            message: "Thread ID not found in response",
+            error: "Thread ID missing",
+            data: data.result
+          };
+        }
+        return {
+          success: true,
+          threadId,
+          thread: data.result.thread || data.result,
+          threadData: data.result,
+          message: "Thread created successfully"
+        };
+      } else {
+        logger.error(`[ApiService] Thread creation failed: ${data.message || "Unknown error"}`, "content");
+        logger.error(`[ApiService] Response data: ${JSON.stringify(data)}`, "content");
+        return {
+          success: false,
+          message: data.message || "Failed to create thread",
+          error: data.message || "Unknown error",
+          data
+        };
+      }
+    } catch (error) {
+      logger.error(`[ApiService] Thread creation error: ${error.message}`, "content");
+      logger.error(`[ApiService] Error stack: ${error.stack}`, "content");
+      return {
+        success: false,
+        message: error.message,
+        error: error.message
+      };
+    }
+  }
+  /**
+   * Get messages from a thread
+   * GET /api/messages/0.1/messages/?threads[]=12345678
+   * 
+   * @param {number|Array<number>} threadIds - Thread ID or array of thread IDs
+   * @param {string} authToken - Freelancer-Auth-V2 token
+   * @returns {Promise<Object>} Result with messages array
+   */
+  async getThreadMessages(threadIds, authToken) {
+    try {
+      if (!authToken) {
+        return { success: false, message: "Not authenticated" };
+      }
+      if (!Array.isArray(threadIds)) {
+        threadIds = [threadIds];
+      }
+      if (!threadIds.length) {
+        return { success: false, message: "At least one thread ID is required" };
+      }
+      const params = new URLSearchParams();
+      threadIds.forEach((threadId) => {
+        params.append("threads[]", threadId.toString());
+      });
+      logger.log(`[ApiService] Getting messages for threads: ${threadIds.join(", ")}`, "content");
+      const url = new URL(`${this.baseUrl}${API_ENDPOINTS.GET_MESSAGES}`);
+      url.search = params.toString();
+      logger.log(`[ApiService] Request URL: ${url.toString()}`, "content");
+      const data = await this._authenticatedFetch(url.toString(), authToken, {
+        method: "GET"
+      });
+      if (data.status === "success" && data.result) {
+        const messages = Array.isArray(data.result.messages) ? data.result.messages : [];
+        return {
+          success: true,
+          messages,
+          threads: data.result.threads,
+          users: data.result.users,
+          messageData: data.result,
+          message: "Messages retrieved successfully"
+        };
+      } else {
+        logger.error(`[ApiService] Get messages failed: ${data.message || "Unknown error"}`, "content");
+        logger.error(`[ApiService] Response data: ${JSON.stringify(data)}`, "content");
+        return {
+          success: false,
+          message: data.message || "Failed to get messages",
+          error: data.message || "Unknown error",
+          data
+        };
+      }
+    } catch (error) {
+      logger.error(`[ApiService] Get messages error: ${error.message}`, "content");
+      logger.error(`[ApiService] Error stack: ${error.stack}`, "content");
+      return {
+        success: false,
+        message: error.message,
+        error: error.message
+      };
+    }
+  }
+  /**
+   * Force send a message (creates thread and sends message in one call)
+   * @param {number} projectId - Project ID
+   * @param {number} toId - Recipient user ID (project owner)
+   * @param {string} messageText - Message text to send
+   * @param {string} authToken - Freelancer-Auth-V2 token
+   * @returns {Promise<Object>} Result with message ID and thread ID
+   */
+  async forceSendMessage(projectId, toId, messageText, authToken) {
+    try {
+      if (!authToken) {
+        return { success: false, message: "Not authenticated" };
+      }
+      if (!projectId || !toId || !messageText) {
+        return { success: false, message: "Project ID, recipient ID, and message text are required" };
+      }
+      const url = `${this.baseUrl}${API_ENDPOINTS.SEND_MESSAGE}`;
+      const requestBody = {
+        project_id: projectId,
+        to_id: toId,
+        message: messageText
+      };
+      const data = await this._authenticatedFetch(url, authToken, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(requestBody)
+      });
+      if (data.status === "success" && data.result) {
+        const messageId = data.result.id || data.result.message_id;
+        const threadId = data.result.thread_id;
+        return {
+          success: true,
+          messageId,
+          threadId,
+          message: data.result,
+          result: "Message sent successfully"
+        };
+      } else {
+        return {
+          success: false,
+          message: data.message || "Failed to send message",
+          error: data.message
+        };
+      }
+    } catch (error) {
+      return {
+        success: false,
+        message: error.message,
+        error: error.message
+      };
+    }
+  }
+  /**
+   * Fetch currencies from Freelancer.com API
+   * @returns {Promise<Object>} Result with currencies array
+   */
+  async fetchCurrencies() {
+    try {
+      const url = new URL(`${this.baseUrl}${API_ENDPOINTS.CURRENCIES}`);
+      const data = await this._fetch(url.toString());
+      if (data.status === "success" && data.result && data.result.currencies) {
+        return {
+          success: true,
+          currencies: data.result.currencies
+        };
+      }
+      return {
+        success: false,
+        currencies: [],
+        message: data.message || "Failed to fetch currencies",
+        error: data.message
+      };
+    } catch (error) {
+      return {
+        success: false,
+        currencies: [],
+        message: error.message,
+        error: error.message
+      };
+    }
+  }
+}
+const apiService = new ApiService();
+let currenciesCache = null;
+let currenciesCacheTimestamp = null;
 const utils = {
   /**
    * Generate a random integer between min and max (inclusive)
@@ -3345,11 +4132,41 @@ const utils = {
     return arr.join(", ");
   },
   /**
-   * Get currency symbol from currency code (fallbacks to code)
+   * Fetch currencies from API and cache them
+   * @returns {Promise<Array>} Array of currency objects
+   */
+  async fetchCurrencies() {
+    const now = Date.now();
+    if (currenciesCache && currenciesCacheTimestamp && now - currenciesCacheTimestamp < CURRENCIES_CACHE_DURATION) {
+      return currenciesCache;
+    }
+    try {
+      const result = await apiService.fetchCurrencies();
+      if (result.success && result.currencies) {
+        currenciesCache = result.currencies;
+        currenciesCacheTimestamp = now;
+        return currenciesCache;
+      }
+    } catch (error) {
+      logger.warn(`Failed to fetch currencies: ${error.message}`, "content");
+    }
+    return [];
+  },
+  /**
+   * Get currency symbol from currency code
+   * Uses API data if available, falls back to hardcoded symbols
+   * @param {string} code - Currency code (e.g., 'USD', 'EUR')
+   * @returns {string} Currency symbol
    */
   getCurrencySymbol(code) {
     if (!code) return "";
     const upper = code.toUpperCase();
+    if (currenciesCache && Array.isArray(currenciesCache)) {
+      const currency = currenciesCache.find((c) => c.code === upper);
+      if (currency && currency.sign) {
+        return currency.sign;
+      }
+    }
     const symbols = {
       USD: "$",
       EUR: "€",
@@ -3369,9 +4186,45 @@ const utils = {
       RUB: "₽",
       TRY: "₺",
       MXN: "$",
-      BRL: "R$"
+      BRL: "R$",
+      HKD: "$"
+      // Added from API response
     };
     return symbols[upper] || upper;
+  },
+  /**
+   * Get exchange rate for a currency to USD
+   * The exchange_rate field in the API represents: 1 unit of currency = exchange_rate USD
+   * @param {string} code - Currency code (e.g., 'EUR', 'GBP')
+   * @returns {number|null} Exchange rate to USD, or null if not found
+   */
+  getCurrencyRateToUSD(code) {
+    if (!code) return null;
+    const upper = code.toUpperCase();
+    if (upper === "USD") return 1;
+    if (currenciesCache && Array.isArray(currenciesCache)) {
+      const currency = currenciesCache.find((c) => c.code === upper);
+      if (currency && currency.exchange_rate !== void 0) {
+        return currency.exchange_rate;
+      }
+    }
+    return 1;
+  },
+  /**
+   * Convert amount from a currency to USD
+   * @param {number} amount - Amount to convert
+   * @param {string} fromCurrency - Source currency code (e.g., 'EUR', 'GBP')
+   * @returns {number} Amount in USD, or original amount if conversion fails
+   */
+  convertToUSD(amount, fromCurrency) {
+    if (!amount || amount === 0) return 0;
+    if (!fromCurrency) return amount;
+    const rate = this.getCurrencyRateToUSD(fromCurrency);
+    if (rate === null || rate === 0) {
+      logger.warn(`Exchange rate not found for ${fromCurrency}, using original amount`, "content");
+      return amount;
+    }
+    return amount * rate;
   },
   /**
    * Check if string contains any of the keywords (case-insensitive)
@@ -3443,23 +4296,31 @@ const utils = {
   /**
    * Calculate bid amount based on project budget or hourly rate
    * Uses project size category to determine appropriate bid amount
+   * Budget/rate values should be in USD (will be converted if currency provided)
    * @param {number} minBudget - Minimum project budget or hourly rate
    * @param {number} maxBudget - Maximum project budget or hourly rate
    * @param {boolean} isHourly - Whether this is an hourly rate project (default: false)
+   * @param {string} currency - Optional currency code to convert from (if not already in USD)
    */
-  calculateBidAmount(minBudget, maxBudget, isHourly = false) {
-    const category = isHourly ? this.getHourlyRateProjectSizeCategory(minBudget, maxBudget) : this.getProjectSizeCategory(minBudget, maxBudget);
+  calculateBidAmount(minBudget, maxBudget, isHourly = false, currency = null) {
+    const minBudgetUSD = currency ? this.convertToUSD(minBudget, currency) : minBudget;
+    const maxBudgetUSD = currency ? this.convertToUSD(maxBudget, currency) : maxBudget;
+    const category = isHourly ? this.getHourlyRateProjectSizeCategory(minBudgetUSD, maxBudgetUSD) : this.getProjectSizeCategory(minBudgetUSD, maxBudgetUSD);
     return category.avgBudget;
   },
   /**
    * Calculate project duration based on budget or hourly rate
    * Uses project size category to determine appropriate duration
+   * Budget/rate values should be in USD (will be converted if currency provided)
    * @param {number} minBudget - Minimum project budget or hourly rate
    * @param {number} maxBudget - Maximum project budget or hourly rate
    * @param {boolean} isHourly - Whether this is an hourly rate project (default: false)
+   * @param {string} currency - Optional currency code to convert from (if not already in USD)
    */
-  calculateDuration(minBudget, maxBudget, isHourly = false) {
-    const category = isHourly ? this.getHourlyRateProjectSizeCategory(minBudget, maxBudget) : this.getProjectSizeCategory(minBudget, maxBudget);
+  calculateDuration(minBudget, maxBudget, isHourly = false, currency = null) {
+    const minBudgetUSD = currency ? this.convertToUSD(minBudget, currency) : minBudget;
+    const maxBudgetUSD = currency ? this.convertToUSD(maxBudget, currency) : maxBudget;
+    const category = isHourly ? this.getHourlyRateProjectSizeCategory(minBudgetUSD, maxBudgetUSD) : this.getProjectSizeCategory(minBudgetUSD, maxBudgetUSD);
     return category.duration;
   },
   /**
@@ -17074,759 +17935,6 @@ const {
   setSession
 } = authSlice.actions;
 const authReducer = authSlice.reducer;
-class ApiService {
-  constructor() {
-    this.baseUrl = API_ENDPOINTS.BASE_URL;
-  }
-  /**
-   * Make a fetch request with common headers and error handling
-   * @private
-   */
-  async _fetch(url, options = {}) {
-    const defaultHeaders = {
-      accept: "application/json, text/plain, */*",
-      ...options.headers
-    };
-    const response = await fetch(url, {
-      ...options,
-      headers: defaultHeaders
-    });
-    if (!response.ok) {
-      let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-      let errorDetails = null;
-      try {
-        const errorData = await response.json();
-        errorMessage = errorData.message || errorData.error || errorData.error_description || errorMessage;
-        errorDetails = errorData;
-      } catch (e) {
-        try {
-          const text = await response.text();
-          if (text) {
-            errorMessage = `${errorMessage} - ${text}`;
-            errorDetails = { raw: text };
-          }
-        } catch (textError) {
-        }
-      }
-      if (response.status === 403) {
-        logger.error(`[ApiService] 403 Forbidden - ${errorMessage}`, "content");
-        if (errorDetails) {
-          logger.error(`[ApiService] Error details: ${JSON.stringify(errorDetails)}`, "content");
-        }
-      }
-      throw new Error(errorMessage);
-    }
-    return await response.json();
-  }
-  /**
-   * Make an authenticated request
-   * @private
-   */
-  async _authenticatedFetch(url, authToken, options = {}) {
-    if (!authToken) {
-      throw new Error("Authentication token required");
-    }
-    return this._fetch(url, {
-      ...options,
-      headers: {
-        "Freelancer-Auth-V2": authToken,
-        ...options.headers
-      }
-    });
-  }
-  /**
-   * Fetch user profile from API
-   * @returns {Promise<Object>} Result with user profile data
-   */
-  async fetchUserProfile() {
-    try {
-      const params = new URLSearchParams({
-        status: "true",
-        webapp: "1",
-        avatar: "true",
-        compact: "true",
-        new_errors: "true",
-        new_pools: "true",
-        display_info: "true",
-        country_details: "true",
-        jobs: "true",
-        membership_details: "true",
-        portfolio_details: "true",
-        preferred_details: "true",
-        profile_description: "true",
-        qualification_details: "true",
-        recommendations: "true",
-        responsiveness: "true",
-        badge_details: "true",
-        rising_star: "true"
-      });
-      const url = new URL(`${this.baseUrl}${API_ENDPOINTS.USER_PROFILE}`);
-      url.search = params.toString();
-      const data = await this._fetch(url.toString());
-      if (data.status === "success") {
-        return {
-          success: true,
-          data: data.result
-        };
-      } else {
-        throw new Error(data.message || "API returned unsuccessful status");
-      }
-    } catch (error) {
-      return {
-        success: false,
-        error: error.message
-      };
-    }
-  }
-  /**
-   * Fetch employer details from users API with employer reputation
-   * @param {number} employerId - Employer/User ID
-   * @returns {Promise<Object>} Result with employer details
-   */
-  async fetchEmployerDetails(employerId) {
-    var _a2, _b, _c, _d, _e, _f, _g, _h;
-    try {
-      const params = new URLSearchParams({
-        employer_reputation: "true"
-      });
-      const url = new URL(`${this.baseUrl}${API_ENDPOINTS.USER_DETAILS}${employerId}`);
-      url.search = params.toString();
-      const data = await this._fetch(url.toString());
-      if (data.status !== "success" || !data.result) {
-        throw new Error("API returned unsuccessful status");
-      }
-      const result = data.result;
-      const rep = ((_a2 = result.employer_reputation) == null ? void 0 : _a2.entire_history) || {};
-      let logoUrl = result.avatar_cdn || result.avatar_large_cdn || result.avatar || null;
-      if (logoUrl && logoUrl.startsWith("//")) {
-        logoUrl = "https:" + logoUrl;
-      } else if (!logoUrl) {
-        logoUrl = `${this.baseUrl}/img/unknown.png`;
-      }
-      const details = {
-        name: result.username || result.public_name || result.display_name || "Unknown",
-        logo: logoUrl,
-        past_projects: rep.all || 0,
-        completed_projects: rep.reviews || 0,
-        payment_verified: ((_b = result.status) == null ? void 0 : _b.payment_verified) || false,
-        email_verified: ((_c = result.status) == null ? void 0 : _c.email_verified) || false,
-        phone_verified: ((_d = result.status) == null ? void 0 : _d.phone_verified) || false,
-        identity_verified: ((_e = result.status) == null ? void 0 : _e.identity_verified) || false,
-        country: ((_g = (_f = result.location) == null ? void 0 : _f.country) == null ? void 0 : _g.name) || null,
-        member_since: result.registration_date ? new Date(result.registration_date * 1e3).toLocaleDateString() : null,
-        overall_rating: rep.overall || null,
-        completion_rate: rep.completion_rate || null,
-        positive_percentage: rep.positive ? (rep.positive * 100).toFixed(1) : null,
-        earnings_score: ((_h = result.employer_reputation) == null ? void 0 : _h.earnings_score) || null
-      };
-      return {
-        success: true,
-        data: details
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error.message
-      };
-    }
-  }
-  /**
-   * Lookup project by SEO URL
-   * @param {string} seoUrl - Project SEO URL slug
-   * @returns {Promise<Object>} Result with project data
-   */
-  async lookupProjectBySeoUrl(seoUrl) {
-    try {
-      const params = new URLSearchParams({
-        limit: "1",
-        "seo_urls[]": seoUrl,
-        selected_bids: "true",
-        file_details: "true",
-        webapp: "1",
-        compact: "true",
-        new_errors: "true",
-        new_pools: "true"
-      });
-      const url = new URL(`${this.baseUrl}${API_ENDPOINTS.PROJECT_SEARCH}`);
-      url.search = params.toString();
-      const data = await this._fetch(url.toString());
-      if (data.status === "success" && data.result && data.result.projects && data.result.projects.length > 0) {
-        const project = data.result.projects[0];
-        const normalizedSeoUrl = seoUrl.trim().replace(/\/$/, "");
-        const normalizedProjectSeoUrl = (project.seo_url || "").trim().replace(/\/$/, "");
-        if (normalizedProjectSeoUrl === normalizedSeoUrl) {
-          return {
-            success: true,
-            project
-          };
-        } else {
-          const matchingProject = data.result.projects.find((p) => {
-            const normalized = (p.seo_url || "").trim().replace(/\/$/, "");
-            return normalized === normalizedSeoUrl;
-          });
-          if (matchingProject) {
-            return {
-              success: true,
-              project: matchingProject
-            };
-          } else {
-            throw new Error(`Project SEO URL mismatch. Expected: ${normalizedSeoUrl}, Got: ${normalizedProjectSeoUrl}`);
-          }
-        }
-      } else {
-        throw new Error("No projects returned from API");
-      }
-    } catch (error) {
-      return {
-        success: false,
-        error: error.message
-      };
-    }
-  }
-  /**
-   * Fetch project details from API
-   * @param {number} projectId - Project ID
-   * @param {string} authToken - Freelancer-Auth-V2 token (optional)
-   * @returns {Promise<Object>} Result with project details
-   */
-  async fetchProjectDetails(projectId, authToken = null) {
-    try {
-      const params = new URLSearchParams({
-        compact: "true",
-        job_details: "true",
-        user_details: "true",
-        user_avatar: "true",
-        user_country_details: "true",
-        user_display_info: "true",
-        user_membership_details: "true"
-      });
-      const url = new URL(`${this.baseUrl}${API_ENDPOINTS.PROJECT_DETAILS}${projectId}`);
-      url.search = params.toString();
-      let data;
-      if (authToken) {
-        data = await this._authenticatedFetch(url.toString(), authToken);
-      } else {
-        data = await this._fetch(url.toString());
-      }
-      if (data.status === "success") {
-        return {
-          success: true,
-          data: data.result
-        };
-      } else {
-        throw new Error(data.message || "API returned unsuccessful status");
-      }
-    } catch (error) {
-      return {
-        success: false,
-        error: error.message
-      };
-    }
-  }
-  /**
-   * Check if user can bid on a project
-   * @param {number|string} projectId - Project ID
-   * @param {string} authToken - Freelancer-Auth-V2 token (optional but recommended)
-   * @returns {Promise<Object>} Result with canBid status
-   */
-  async checkCanBidOnProject(projectId, authToken = null) {
-    var _a2, _b, _c, _d, _e, _f, _g, _h, _i;
-    try {
-      const params = new URLSearchParams({
-        projectId: projectId.toString(),
-        compact: "true",
-        new_errors: "true",
-        new_pools: "true"
-      });
-      const url = new URL(`${this.baseUrl}${API_ENDPOINTS.CAN_BID_ON_PROJECT}`);
-      url.search = params.toString();
-      let data;
-      if (authToken) {
-        data = await this._authenticatedFetch(url.toString(), authToken);
-      } else {
-        data = await this._fetch(url.toString());
-      }
-      if (data.status === "success" && data.result) {
-        const result = data.result;
-        const openForBidding = result.openForBidding === true;
-        const hasPremiumProjectEligible = result.premiumProjectEligible !== void 0;
-        const hasPremiumVerifiedProjectEligible = result.premiumVerifiedProjectEligible !== void 0;
-        const hasPremiumVerifiedJobEligible = result.premiumVerifiedJobEligible !== void 0;
-        const hasFeaturedPremiumProjectEligible = result.featuredPremiumProjectEligible !== void 0;
-        const criticalChecks = {
-          openForBidding,
-          freelancerHasBalance: result.freelancerHasBalance === true,
-          freelancerEmailVerified: result.freelancerEmailVerified === true,
-          profileCompleted: result.profileCompleted === true,
-          skillRequirementsMet: result.skillRequirementsMet === true,
-          hasBidRestriction: result.hasBidRestriction === false,
-          notSpamRestricted: result.notSpamRestricted === true,
-          certificationRequirementsMet: result.certificationRequirementsMet === true,
-          freelancerInvitationRequirementMet: result.freelancerInvitationRequirementMet === true,
-          freelancerPreferredRequirementMet: result.freelancerPreferredRequirementMet === true,
-          ndaRequirementMet: result.ndaRequirementMet === true,
-          projectLanguageCriteriaMet: result.projectLanguageCriteriaMet === true,
-          expertCommunityRequirementMet: result.expertCommunityRequirementMet === true,
-          isAtoSerrRequirementMet: result.isAtoSerrRequirementMet === true
-        };
-        const premiumChecks = {
-          premiumProjectEligible: hasPremiumProjectEligible ? ((_a2 = result.premiumProjectEligible) == null ? void 0 : _a2.status) === true : true,
-          premiumVerifiedProjectEligible: hasPremiumVerifiedProjectEligible ? ((_b = result.premiumVerifiedProjectEligible) == null ? void 0 : _b.status) === true : true,
-          premiumVerifiedJobEligible: hasPremiumVerifiedJobEligible ? ((_c = result.premiumVerifiedJobEligible) == null ? void 0 : _c.status) === true : true,
-          featuredPremiumProjectEligible: hasFeaturedPremiumProjectEligible ? ((_d = result.featuredPremiumProjectEligible) == null ? void 0 : _d.status) === true : true
-        };
-        let canBid = openForBidding && criticalChecks.freelancerHasBalance && criticalChecks.freelancerEmailVerified && criticalChecks.profileCompleted && criticalChecks.skillRequirementsMet && criticalChecks.hasBidRestriction && criticalChecks.notSpamRestricted && criticalChecks.certificationRequirementsMet && criticalChecks.freelancerInvitationRequirementMet && criticalChecks.freelancerPreferredRequirementMet && criticalChecks.ndaRequirementMet && criticalChecks.projectLanguageCriteriaMet && criticalChecks.expertCommunityRequirementMet && criticalChecks.isAtoSerrRequirementMet;
-        if (hasPremiumProjectEligible) {
-          canBid = canBid && premiumChecks.premiumProjectEligible;
-        }
-        if (hasPremiumVerifiedProjectEligible) {
-          canBid = canBid && premiumChecks.premiumVerifiedProjectEligible;
-        }
-        if (hasPremiumVerifiedJobEligible) {
-          canBid = canBid && premiumChecks.premiumVerifiedJobEligible;
-        }
-        if (hasFeaturedPremiumProjectEligible) {
-          canBid = canBid && premiumChecks.featuredPremiumProjectEligible;
-        }
-        let message = canBid ? "Can bid on project" : "Cannot bid on project";
-        if (!canBid) {
-          const failedChecks = [];
-          if (!openForBidding) failedChecks.push("Project not open for bidding");
-          if (!criticalChecks.freelancerHasBalance) failedChecks.push("Insufficient balance");
-          if (!criticalChecks.freelancerEmailVerified) failedChecks.push("Email not verified");
-          if (!criticalChecks.profileCompleted) failedChecks.push("Profile not completed");
-          if (!criticalChecks.skillRequirementsMet) failedChecks.push("Skill requirements not met");
-          if (!criticalChecks.hasBidRestriction) failedChecks.push("Bid restriction active");
-          if (!criticalChecks.notSpamRestricted) failedChecks.push("Account spam restricted");
-          if (!criticalChecks.certificationRequirementsMet) failedChecks.push("Certification requirements not met");
-          if (!criticalChecks.freelancerInvitationRequirementMet) failedChecks.push("Invitation requirement not met");
-          if (!criticalChecks.freelancerPreferredRequirementMet) failedChecks.push("Preferred freelancer requirement not met");
-          if (!criticalChecks.ndaRequirementMet) failedChecks.push("NDA requirement not met");
-          if (!criticalChecks.projectLanguageCriteriaMet) failedChecks.push("Project language criteria not met");
-          if (!criticalChecks.expertCommunityRequirementMet) failedChecks.push("Expert community requirement not met");
-          if (!criticalChecks.isAtoSerrRequirementMet) failedChecks.push("AtoSerr requirement not met");
-          if (hasPremiumProjectEligible && !premiumChecks.premiumProjectEligible) {
-            const threshold = ((_e = result.premiumProjectEligible) == null ? void 0 : _e.thresholdAmountUsd) || 0;
-            const minReviews = ((_f = result.premiumProjectEligible) == null ? void 0 : _f.minimumReviewCount) || 0;
-            failedChecks.push(`Not eligible for premium projects (need ${minReviews} reviews, $${threshold} threshold)`);
-          }
-          if (hasPremiumVerifiedProjectEligible && !premiumChecks.premiumVerifiedProjectEligible) {
-            const threshold = ((_g = result.premiumVerifiedProjectEligible) == null ? void 0 : _g.thresholdAmountUsd) || 0;
-            failedChecks.push(`Not eligible for premium verified projects ($${threshold} threshold)`);
-          }
-          if (hasPremiumVerifiedJobEligible && !premiumChecks.premiumVerifiedJobEligible) {
-            const jobsRequired = ((_h = result.premiumVerifiedJobEligible) == null ? void 0 : _h.jobsRequired) || [];
-            const jobNames = jobsRequired.map((j) => j.name).join(", ");
-            failedChecks.push(`Not eligible for premium verified jobs (need: ${jobNames})`);
-          }
-          if (hasFeaturedPremiumProjectEligible && !premiumChecks.featuredPremiumProjectEligible) {
-            const minReviews = ((_i = result.featuredPremiumProjectEligible) == null ? void 0 : _i.minimumReviewCount) || 0;
-            failedChecks.push(`Not eligible for featured premium projects (need ${minReviews} reviews)`);
-          }
-          if (failedChecks.length > 0) {
-            message = `Cannot bid: ${failedChecks.join(", ")}`;
-          }
-        }
-        return {
-          success: true,
-          canBid,
-          openForBidding,
-          message,
-          data: result,
-          criticalChecks,
-          premiumChecks
-        };
-      } else {
-        return {
-          success: false,
-          canBid: false,
-          openForBidding: false,
-          message: data.message || "API check failed",
-          error: data.message
-        };
-      }
-    } catch (error) {
-      return {
-        success: false,
-        canBid: false,
-        error: error.message
-      };
-    }
-  }
-  /**
-   * Check if user has already bid on a project
-   * @param {number|string} projectId - Project ID
-   * @param {number|string} bidderId - User/Bidder ID
-   * @param {string} authToken - Freelancer-Auth-V2 token (optional but recommended)
-   * @returns {Promise<Object>} Result with hasBid status
-   */
-  async checkSelfBid(projectId, bidderId, authToken = null) {
-    try {
-      const params = new URLSearchParams({
-        limit: "1",
-        [`bidders[]`]: bidderId.toString(),
-        quotations: "true",
-        include_profile_id: "true",
-        bid_billing_info: "true",
-        webapp: "1",
-        compact: "true",
-        new_errors: "true",
-        new_pools: "true"
-      });
-      if (projectId) {
-        params.append(`projects[]`, projectId.toString());
-      }
-      const url = new URL(`${this.baseUrl}${API_ENDPOINTS.CHECK_SELF_BID}`);
-      url.search = params.toString();
-      let data;
-      if (authToken) {
-        data = await this._authenticatedFetch(url.toString(), authToken);
-      } else {
-        data = await this._fetch(url.toString());
-      }
-      if (data.status === "success" && data.result) {
-        const bids = data.result.bids || [];
-        const hasBid = Array.isArray(bids) && bids.length > 0;
-        let projectBids = bids;
-        if (projectId && hasBid) {
-          projectBids = bids.filter(
-            (bid) => bid.project_id && bid.project_id.toString() === projectId.toString()
-          );
-        }
-        const hasBidOnProject = projectBids.length > 0;
-        return {
-          success: true,
-          hasBid: hasBidOnProject,
-          bidCount: projectBids.length,
-          bids: projectBids,
-          allBids: bids,
-          message: hasBidOnProject ? "User has already bid on this project" : "User has not bid on this project"
-        };
-      } else {
-        return {
-          success: false,
-          hasBid: false,
-          bidCount: 0,
-          message: data.message || "API check failed",
-          error: data.message
-        };
-      }
-    } catch (error) {
-      return {
-        success: false,
-        hasBid: false,
-        bidCount: 0,
-        error: error.message
-      };
-    }
-  }
-  /**
-   * Fetch active projects from API
-   * @returns {Promise<Object>} Result with projects list
-   */
-  async fetchActiveProjects() {
-    try {
-      const params = new URLSearchParams({
-        compact: "true",
-        limit: "50",
-        "project_statuses[]": "active",
-        "job_details": "true",
-        "location_details": "true",
-        "user_details": "true",
-        "sort_field": "time_updated",
-        "sort_order": "DESC"
-      });
-      const url = new URL(`${this.baseUrl}${API_ENDPOINTS.PROJECTS}`);
-      url.search = params.toString();
-      const data = await this._fetch(url.toString());
-      if (data.status === "success" && data.result && data.result.projects) {
-        return {
-          success: true,
-          projects: data.result.projects
-        };
-      } else {
-        throw new Error(data.message || "No projects in API response");
-      }
-    } catch (error) {
-      return {
-        success: false,
-        error: error.message
-      };
-    }
-  }
-  /**
-   * Submit bid to Freelancer API
-   * @param {Object} bidData - Bid data
-   * @param {string} authToken - Freelancer-Auth-V2 token
-   * @returns {Promise<Object>} Result
-   */
-  async submitBid(bidData, authToken) {
-    var _a2;
-    try {
-      if (!authToken) {
-        return {
-          success: false,
-          message: "Not authenticated - missing auth token"
-        };
-      }
-      const url = `${this.baseUrl}${API_ENDPOINTS.PLACE_BID}`;
-      const data = await this._authenticatedFetch(url, authToken, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(bidData)
-      });
-      if (data.status === "success") {
-        return {
-          success: true,
-          bidId: (_a2 = data.result) == null ? void 0 : _a2.id,
-          message: "Bid placed successfully"
-        };
-      } else {
-        return {
-          success: false,
-          message: data.message || "Failed to submit bid"
-        };
-      }
-    } catch (error) {
-      return {
-        success: false,
-        message: error.message || "Failed to submit bid"
-      };
-    }
-  }
-  /**
-   * Update proposal description
-   * @param {number} bidId - Bid ID
-   * @param {Object} proposalData - Proposal data
-   * @param {string} authToken - Freelancer-Auth-V2 token
-   * @returns {Promise<Object>} Result
-   */
-  async updateProposal(bidId, proposalData, authToken) {
-    try {
-      if (!authToken) {
-        return {
-          success: false,
-          message: "Not authenticated"
-        };
-      }
-      const url = `${this.baseUrl}${API_ENDPOINTS.UPDATE_BID}${bidId}/`;
-      const data = await this._authenticatedFetch(url, authToken, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(proposalData)
-      });
-      return {
-        success: data.status === "success",
-        message: data.message
-      };
-    } catch (error) {
-      return {
-        success: false,
-        message: error.message || "Failed to update proposal"
-      };
-    }
-  }
-  /**
-   * Create or get message thread
-   * POST /api/messages/0.1/threads/?members[]=1234567&members[]=1234568&context_type=project&context=9987678
-   * 
-   * @param {Array<number>} members - Member user IDs array
-   * @param {string} contextType - Context type (e.g., 'project')
-   * @param {number|string} context - Context ID (project ID for project context)
-   * @param {string} authToken - Freelancer-Auth-V2 token
-   * @returns {Promise<Object>} Result with thread ID
-   */
-  async createMessageThread(members, contextType, context, authToken) {
-    var _a2;
-    try {
-      if (!authToken) {
-        return { success: false, message: "Not authenticated" };
-      }
-      if (!Array.isArray(members)) {
-        members = [members];
-      }
-      if (!members.length) {
-        return { success: false, message: "At least one member ID is required" };
-      }
-      if (!contextType) {
-        return { success: false, message: "Context type is required" };
-      }
-      if (!context) {
-        return { success: false, message: "Context ID is required" };
-      }
-      const params = new URLSearchParams();
-      members.forEach((memberId) => {
-        params.append("members[]", memberId.toString());
-      });
-      params.append("context_type", contextType);
-      params.append("context", context.toString());
-      logger.log(`[ApiService] Creating thread with params: ${params.toString()}`, "content");
-      logger.log(`[ApiService] Members: ${members.join(", ")}, ContextType: ${contextType}, Context: ${context}`, "content");
-      const url = new URL(`${this.baseUrl}${API_ENDPOINTS.CREATE_MESSAGE_THREAD}`);
-      url.search = params.toString();
-      logger.log(`[ApiService] Request URL: ${url.toString()}`, "content");
-      logger.log(`[ApiService] Auth token length: ${(authToken == null ? void 0 : authToken.length) || 0}`, "content");
-      logger.log(`[ApiService] Auth token preview: ${authToken ? authToken.substring(0, 20) + "..." : "null"}`, "content");
-      const data = await this._authenticatedFetch(url.toString(), authToken, {
-        method: "POST"
-      });
-      if (data.status === "success" && data.result) {
-        const threadId = data.result.id || ((_a2 = data.result.thread) == null ? void 0 : _a2.id) || data.result.thread_id;
-        if (!threadId) {
-          return {
-            success: false,
-            message: "Thread ID not found in response",
-            error: "Thread ID missing",
-            data: data.result
-          };
-        }
-        return {
-          success: true,
-          threadId,
-          thread: data.result.thread || data.result,
-          threadData: data.result,
-          message: "Thread created successfully"
-        };
-      } else {
-        logger.error(`[ApiService] Thread creation failed: ${data.message || "Unknown error"}`, "content");
-        logger.error(`[ApiService] Response data: ${JSON.stringify(data)}`, "content");
-        return {
-          success: false,
-          message: data.message || "Failed to create thread",
-          error: data.message || "Unknown error",
-          data
-        };
-      }
-    } catch (error) {
-      logger.error(`[ApiService] Thread creation error: ${error.message}`, "content");
-      logger.error(`[ApiService] Error stack: ${error.stack}`, "content");
-      return {
-        success: false,
-        message: error.message,
-        error: error.message
-      };
-    }
-  }
-  /**
-   * Get messages from a thread
-   * GET /api/messages/0.1/messages/?threads[]=12345678
-   * 
-   * @param {number|Array<number>} threadIds - Thread ID or array of thread IDs
-   * @param {string} authToken - Freelancer-Auth-V2 token
-   * @returns {Promise<Object>} Result with messages array
-   */
-  async getThreadMessages(threadIds, authToken) {
-    try {
-      if (!authToken) {
-        return { success: false, message: "Not authenticated" };
-      }
-      if (!Array.isArray(threadIds)) {
-        threadIds = [threadIds];
-      }
-      if (!threadIds.length) {
-        return { success: false, message: "At least one thread ID is required" };
-      }
-      const params = new URLSearchParams();
-      threadIds.forEach((threadId) => {
-        params.append("threads[]", threadId.toString());
-      });
-      logger.log(`[ApiService] Getting messages for threads: ${threadIds.join(", ")}`, "content");
-      const url = new URL(`${this.baseUrl}${API_ENDPOINTS.GET_MESSAGES}`);
-      url.search = params.toString();
-      logger.log(`[ApiService] Request URL: ${url.toString()}`, "content");
-      const data = await this._authenticatedFetch(url.toString(), authToken, {
-        method: "GET"
-      });
-      if (data.status === "success" && data.result) {
-        const messages = Array.isArray(data.result.messages) ? data.result.messages : [];
-        return {
-          success: true,
-          messages,
-          threads: data.result.threads,
-          users: data.result.users,
-          messageData: data.result,
-          message: "Messages retrieved successfully"
-        };
-      } else {
-        logger.error(`[ApiService] Get messages failed: ${data.message || "Unknown error"}`, "content");
-        logger.error(`[ApiService] Response data: ${JSON.stringify(data)}`, "content");
-        return {
-          success: false,
-          message: data.message || "Failed to get messages",
-          error: data.message || "Unknown error",
-          data
-        };
-      }
-    } catch (error) {
-      logger.error(`[ApiService] Get messages error: ${error.message}`, "content");
-      logger.error(`[ApiService] Error stack: ${error.stack}`, "content");
-      return {
-        success: false,
-        message: error.message,
-        error: error.message
-      };
-    }
-  }
-  /**
-   * Force send a message (creates thread and sends message in one call)
-   * @param {number} projectId - Project ID
-   * @param {number} toId - Recipient user ID (project owner)
-   * @param {string} messageText - Message text to send
-   * @param {string} authToken - Freelancer-Auth-V2 token
-   * @returns {Promise<Object>} Result with message ID and thread ID
-   */
-  async forceSendMessage(projectId, toId, messageText, authToken) {
-    try {
-      if (!authToken) {
-        return { success: false, message: "Not authenticated" };
-      }
-      if (!projectId || !toId || !messageText) {
-        return { success: false, message: "Project ID, recipient ID, and message text are required" };
-      }
-      const url = `${this.baseUrl}${API_ENDPOINTS.SEND_MESSAGE}`;
-      const requestBody = {
-        project_id: projectId,
-        to_id: toId,
-        message: messageText
-      };
-      const data = await this._authenticatedFetch(url, authToken, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(requestBody)
-      });
-      if (data.status === "success" && data.result) {
-        const messageId = data.result.id || data.result.message_id;
-        const threadId = data.result.thread_id;
-        return {
-          success: true,
-          messageId,
-          threadId,
-          message: data.result,
-          result: "Message sent successfully"
-        };
-      } else {
-        return {
-          success: false,
-          message: data.message || "Failed to send message",
-          error: data.message
-        };
-      }
-    } catch (error) {
-      return {
-        success: false,
-        message: error.message,
-        error: error.message
-      };
-    }
-  }
-}
-const apiService = new ApiService();
 const CACHE_DURATION = 36e5;
 const initialState$7 = {
   profile: null,
@@ -17961,7 +18069,6 @@ const initialState$6 = {
   apiPullDelay: 20,
   // Minimum 20 seconds for pulling API to get new projects
   autoBotCount: 10,
-  checkCanBid: true,
   openInNewTab: true,
   openProjectModal: false
   // Open project modal when opening freelancer project page
