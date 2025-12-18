@@ -5,15 +5,22 @@
     "src": "../../../@crx/manifest",
     "isEntry": true
   },
-  "_logger.js": {
-    "file": "assets/logger.js",
-    "name": "logger"
+  "_constants.js": {
+    "file": "assets/constants.js",
+    "name": "constants"
   },
-  "_react.js": {
-    "file": "assets/react.js",
-    "name": "react",
+  "_supabaseService.js": {
+    "file": "assets/supabaseService.js",
+    "name": "supabaseService",
     "imports": [
-      "_logger.js"
+      "_constants.js"
+    ]
+  },
+  "_useStorage.js": {
+    "file": "assets/useStorage.js",
+    "name": "useStorage",
+    "imports": [
+      "_constants.js"
     ]
   },
   "index.js-loader.js": {
@@ -26,7 +33,8 @@
     "src": "src/background/index.js",
     "isEntry": true,
     "imports": [
-      "_logger.js"
+      "_constants.js",
+      "_supabaseService.js"
     ]
   },
   "src/content/index.js": {
@@ -35,8 +43,9 @@
     "src": "src/content/index.js",
     "isEntry": true,
     "imports": [
-      "_logger.js",
-      "_react.js"
+      "_constants.js",
+      "_useStorage.js",
+      "_supabaseService.js"
     ],
     "css": [
       "assets/index.css"
@@ -48,8 +57,8 @@
     "src": "src/popup/index.html",
     "isEntry": true,
     "imports": [
-      "_react.js",
-      "_logger.js"
+      "_useStorage.js",
+      "_constants.js"
     ],
     "css": [
       "assets/index2.css"

@@ -69,8 +69,9 @@
       "resources": [
         "icons/*",
         "src/content/bot-styles.css",
-        "assets/logger.js",
-        "assets/react.js",
+        "assets/constants.js",
+        "assets/useStorage.js",
+        "assets/supabaseService.js",
         "assets/index.js.js"
       ],
       "use_dynamic_url": false
