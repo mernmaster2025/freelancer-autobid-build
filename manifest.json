@@ -69,6 +69,9 @@
       "resources": [
         "icons/*",
         "src/content/bot-styles.css",
+        "subscribe.html",
+        "subscribe.css",
+        "subscribe.js",
         "assets/constants.js",
         "assets/useStorage.js",
         "assets/supabaseService.js",
@@ -76,5 +79,8 @@
       ],
       "use_dynamic_url": false
     }
-  ]
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; img-src 'self' https://api.qrserver.com https://nowpayments.io data:; connect-src 'self' https://*.supabase.co https://api.nowpayments.io https://checkout.stripe.com https://www.freelancer.com"
+  }
 }
