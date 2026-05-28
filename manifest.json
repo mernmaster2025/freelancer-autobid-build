@@ -4,29 +4,18 @@
   "version": "2.0.0",
   "description": "Automated bidding bot for Freelancer.com",
   "author": "Mern Master",
-  "oauth2": {
-    "client_id": "1099464556454-ek68j32vnbp31k4opi8kiqal340ltk30.apps.googleusercontent.com",
-    "scopes": [
-      "email",
-      "profile",
-      "openid"
-    ]
-  },
   "permissions": [
     "storage",
     "activeTab",
     "scripting",
     "tabs",
-    "cookies",
-    "identity"
+    "cookies"
   ],
   "host_permissions": [
     "https://www.freelancer.com/*",
     "https://api.openai.com/*",
+    "https://api.anthropic.com/*",
     "https://api.telegram.org/*",
-    "https://*.supabase.co/*",
-    "https://*.supabase.co/auth/v1/*",
-    "https://*.supabase.co/rest/v1/*",
     "https://*.googleapis.com/*"
   ],
   "action": {
@@ -69,18 +58,15 @@
       "resources": [
         "icons/*",
         "src/content/bot-styles.css",
-        "subscribe.html",
-        "subscribe.css",
-        "subscribe.js",
-        "assets/constants.js",
+        "assets/licenseService.js",
         "assets/useStorage.js",
-        "assets/supabaseService.js",
+        "assets/aiService.js",
         "assets/index.js.js"
       ],
       "use_dynamic_url": false
     }
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; img-src 'self' https://api.qrserver.com https://nowpayments.io data:; connect-src 'self' https://*.supabase.co https://api.nowpayments.io https://checkout.stripe.com https://www.freelancer.com"
+    "extension_pages": "script-src 'self'; object-src 'self'; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; img-src 'self' data:; connect-src 'self' https://www.freelancer.com https://api.openai.com https://api.anthropic.com https://api.telegram.org https://*.googleapis.com"
   }
 }
