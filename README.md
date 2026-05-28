@@ -82,7 +82,7 @@ Then reload the extension if needed.
 
 Scan the QR code below to donate or pay from an EVM-compatible wallet.
 
-![EVM donation QR](https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=ethereum%3A0xc3E55e24e7F4d4539e87205F3b03791e0034fdcE)
+![EVM donation QR](./evm-donation-qr.png)
 
 EVM address:
 
